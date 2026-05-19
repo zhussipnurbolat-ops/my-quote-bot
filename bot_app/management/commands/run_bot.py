@@ -22,7 +22,7 @@ from telegram.ext import (
 
 from bot_app.models import FavoriteQuote
 
-TOKEN = "TELEGRAM_BOT_TOKEN"
+TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN')
 
 FORISMATIC_URL = (
     "https://api.forismatic.com/api/1.0/"
