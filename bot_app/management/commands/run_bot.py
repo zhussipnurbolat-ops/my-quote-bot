@@ -1,8 +1,7 @@
 import os
 import datetime
-import requests
+import random
 from django.core.management.base import BaseCommand
-# Import sync_to_async to connect async bot and sync Django ORM
 from asgiref.sync import sync_to_async
 
 from telegram import (
@@ -20,7 +19,7 @@ from telegram.ext import (
     filters,
 )
 
-from bot_app.models import FavoriteQuote
+from bot_app.models import Quote, FavoriteQuote
 
 TOKEN = os.environ.get('TELEGRAM_BOT_TOKEN', 'TELEGRAM_BOT_TOKEN')
 
@@ -29,7 +28,6 @@ FORISMATIC_URL = (
     "?method=getQuote&format=json&lang=ru"
 )
 
-# Main menu keyboard completely in English
 MAIN_KEYBOARD = ReplyKeyboardMarkup(
     keyboard=[
         ["🚀 Start Dialogue"],
@@ -40,8 +38,6 @@ MAIN_KEYBOARD = ReplyKeyboardMarkup(
     one_time_keyboard=False,
     input_field_placeholder="Choose an action from the menu...",
 )
-
-# Keywords and responses translated to English
 EASTER_EGGS = {
     "hello": (
         "👋 Hello, dear user! Glad to see you.\n"
@@ -109,6 +105,19 @@ def _build_quote_inline() -> InlineKeyboardMarkup:
     )
 
 
+def get_categories_keyboard() -> InlineKeyboardMarkup:
+    keyboard = [
+        [
+            InlineKeyboardButton("💪 Motivation", callback_data="category_motivation"),
+            InlineKeyboardButton("🎯 Success", callback_data="category_success")
+        ],
+        [
+            InlineKeyboardButton("🧠 Wisdom", callback_data="category_wisdom")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+
 async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     welcome = (
@@ -120,48 +129,33 @@ async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_html(welcome, reply_markup=MAIN_KEYBOARD)
 
 
-async def handle_get_quote(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    try:
-        response = requests.get(FORISMATIC_URL, timeout=7)
-        response.raise_for_status()
-        data = response.json()
-        quote_text = data.get("quoteText", "").strip()
-        author = data.get("quoteAuthor", "").strip() or "Unknown Author"
-    except requests.exceptions.ConnectionError:
-        await update.message.reply_text("Sorry, the quote service is temporarily unavailable. Please try again later.")
-        return
-    except requests.exceptions.Timeout:
-        await update.message.reply_text("Sorry, the quote service did not respond in time. Please try again later.")
-        return
-    except (requests.exceptions.RequestException, ValueError, KeyError):
-        await update.message.reply_text("Failed to fetch a quote. Please try again shortly.")
-        return
-
-    if not quote_text:
-        await update.message.reply_text("API returned an empty quote. Please try again.")
-        return
-
-    message_text = f"✨ <i>«{quote_text}»</i>\n\n— <b>{author}</b>"
-    await update.message.reply_html(
-        message_text,
-        reply_markup=_build_quote_inline(),
+async def get_quote_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    await update.message.reply_text(
+        text="Please choose a category for your quote:",
+        reply_markup=get_categories_keyboard()
     )
 
-
-# Wrapping synchronous Django ORM functions into async wrappers
 @sync_to_async
 def get_user_favorites(user_id):
     return list(FavoriteQuote.objects.filter(user_id=user_id).order_by("-id")[:5])
+
 
 @sync_to_async
 def save_user_quote(user_id, text, author):
     return FavoriteQuote.objects.create(user_id=user_id, text=text, author=author)
 
 
+@sync_to_async
+def get_quote_by_category(category_name: str):
+    quotes = Quote.objects.filter(category__iexact=category_name)
+    if quotes.exists():
+        return random.choice(quotes)
+    return None
+
+
 async def handle_favorites(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user_id = update.effective_user.id
     try:
-        # Call DB via async bridge
         quotes = await get_user_favorites(user_id)
     except Exception as exc:
         print(f"[ERROR] Error reading from DB: {exc}")
@@ -220,7 +214,6 @@ async def handle_save_quote(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         return
 
     try:
-        # Improved parser for handling different types of dashes
         clean_text = raw_text.replace('✨', '').replace('«', '').replace('»', '').strip()
         
         if "—" in clean_text:
@@ -235,7 +228,6 @@ async def handle_save_quote(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         quote_text = parts[0].strip()
         author = parts[1].strip() if len(parts) > 1 else "Unknown Author"
 
-        # Safe async call to save in Django SQLite database
         await save_user_quote(user_id, quote_text, author)
         
         await query.edit_message_text(
@@ -252,11 +244,26 @@ async def handle_save_quote(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await query.message.reply_text("There was an error saving to the database. Please try again later.")
 
 
+async def category_callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    query = update.callback_query
+    await query.answer() 
+    selected_category = query.data.replace("category_", "")
+    
+    quote = await get_quote_by_category(selected_category)
+    
+    if quote:
+        message = f"📜 «{quote.text}» — {quote.author}"
+        await query.edit_message_text(text=message, reply_markup=_build_quote_inline())
+    else:
+        message = f"No quotes found in *{selected_category.capitalize()}* category yet. But keep moving forward!"
+        await query.edit_message_text(text=message, parse_mode="Markdown")
+
+
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip().lower()
 
     if text == "📜 get a quote":
-        await handle_get_quote(update, context)
+        await get_quote_handler(update, context)
         return
 
     if text == "⭐ my favorites":
@@ -300,9 +307,9 @@ class Command(BaseCommand):
 
         app.add_handler(CommandHandler("start", cmd_start))
         app.add_handler(CallbackQueryHandler(handle_save_quote, pattern="^save_quote$"))
+        app.add_handler(CallbackQueryHandler(category_callback_handler, pattern="^category_"))
+        
         app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
 
         self.stdout.write(self.style.SUCCESS("✅ The bot has been successfully launched and is listening to the server. Press Ctrl+C to stop."))
         app.run_polling(drop_pending_updates=True)
-
-        
