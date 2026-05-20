@@ -261,7 +261,6 @@ async def category_callback_handler(update: Update, context: ContextTypes.DEFAUL
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     text = (update.message.text or "").strip().lower()
-
     if text == "📜 get a quote":
         await get_quote_handler(update, context)
         return
@@ -277,7 +276,6 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     if text == "🚀 start dialogue":
         await handle_start_dialog(update, context)
         return
-
     if text in EASTER_EGGS:
         template = EASTER_EGGS[text]
         if "{time}" in template:
