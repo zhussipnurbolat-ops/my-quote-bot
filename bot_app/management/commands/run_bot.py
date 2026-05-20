@@ -4,6 +4,8 @@ import random
 from django.core.management.base import BaseCommand
 from asgiref.sync import sync_to_async
 
+import aiohttp
+
 from telegram import (
     Update,
     ReplyKeyboardMarkup,
@@ -145,11 +147,33 @@ def save_user_quote(user_id, text, author):
     return FavoriteQuote.objects.create(user_id=user_id, text=text, author=author)
 
 
-@sync_to_async
-def get_quote_by_category(category_name: str):
-    quotes = Quote.objects.filter(category__iexact=category_name)
-    if quotes.exists():
-        return random.choice(quotes)
+async def get_quote_by_category(category_name: str):
+    api_url = f"https://favqs.com/api/quotes/?filter={category_name}&type=tag"
+    headers = {"Authorization": 'Token token="52ff0d04495574581290333b2075587a"'}
+    
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(api_url, headers=headers, timeout=5) as response:
+                if response.status == 200:
+                    data = await response.json()
+                    quotes_list = data.get("quotes", [])
+                    
+                    if quotes_list and isinstance(quotes_list, list):
+                        random_quote = random.choice(quotes_list)
+                        
+                        # Подменяем объект модели Django пустышкой, чтобы не ломать кнопку "Сохранить"
+                        class TemporaryQuote:
+                            def __init__(self, text, author):
+                                self.text = text
+                                self.author = author
+                        
+                        return TemporaryQuote(
+                            text=random_quote.get("body", "Keep moving forward!"),
+                            author=random_quote.get("author", "Unknown")
+                        )
+    except Exception as e:
+        print(f"[API ERROR] Не удалось получить цитату с внешнего сайта: {e}")
+    
     return None
 
 
