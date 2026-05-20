@@ -160,8 +160,6 @@ async def get_quote_by_category(category_name: str):
                     
                     if quotes_list and isinstance(quotes_list, list):
                         random_quote = random.choice(quotes_list)
-                        
-                        # Подменяем объект модели Django пустышкой, чтобы не ломать кнопку "Сохранить"
                         class TemporaryQuote:
                             def __init__(self, text, author):
                                 self.text = text
